@@ -9,13 +9,21 @@ import (
 	"image/png"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/owulveryck/onnx-go"
 	"github.com/owulveryck/onnx-go/backend/x/gorgonnx"
 	"gorgonia.org/tensor"
+)
+
+var (
+	modelDownloadMutex sync.Mutex
+	isDownloadingModel bool
 )
 
 type request struct {
@@ -54,6 +62,9 @@ func dispatch(method string, args []interface{}) (interface{}, error) {
 	switch method {
 	case "ping":
 		return map[string]interface{}{"status": "pong", "plugin": "joss_bg_remover", "engine": "pure_go_onnx"}, nil
+	case "preload", "init":
+		go ensureONNXModelPathAsync()
+		return map[string]interface{}{"status": "preload_started", "plugin": "joss_bg_remover"}, nil
 	case "remove_background", "process":
 		if len(args) == 0 {
 			return nil, fmt.Errorf("se requiere un objeto con image_path u objeto de opciones")
@@ -101,10 +112,10 @@ func removeBackground(imagePath, outputPath, modelPath string) (map[string]inter
 
 func removeBackgroundONNX(imagePath, outputPath, modelPath string) error {
 	if modelPath == "" {
-		modelPath = findONNXModelPath()
+		modelPath = ensureONNXModelPath()
 	}
 	if modelPath == "" || !fileExists(modelPath) {
-		return fmt.Errorf("modelo ONNX no encontrado en %s", modelPath)
+		return fmt.Errorf("modelo ONNX no disponible")
 	}
 
 	modelData, err := os.ReadFile(modelPath)
@@ -279,6 +290,82 @@ func removeBackgroundNativeGo(imagePath, outputPath string) error {
 	defer outFile.Close()
 
 	return png.Encode(outFile, outImg)
+}
+
+func ensureONNXModelPath() string {
+	if path := findONNXModelPath(); path != "" {
+		return path
+	}
+
+	go ensureONNXModelPathAsync()
+	return ""
+}
+
+func ensureONNXModelPathAsync() {
+	modelDownloadMutex.Lock()
+	if isDownloadingModel || findONNXModelPath() != "" {
+		modelDownloadMutex.Unlock()
+		return
+	}
+	isDownloadingModel = true
+	modelDownloadMutex.Unlock()
+
+	defer func() {
+		modelDownloadMutex.Lock()
+		isDownloadingModel = false
+		modelDownloadMutex.Unlock()
+	}()
+
+	cwd, _ := os.Getwd()
+	targetDir := filepath.Join(cwd, "plugins", "joss_bg_remover", "models")
+	_ = os.MkdirAll(targetDir, 0755)
+	targetFile := filepath.Join(targetDir, "model.onnx")
+
+	modelURL := strings.TrimSpace(os.Getenv("ONNX_MODEL_URL"))
+	if modelURL == "" {
+		modelURL = "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx"
+	}
+
+	fmt.Fprintf(os.Stderr, "[joss_bg_remover] Descargando modelo ONNX de IA en segundo plano desde %s...\n", modelURL)
+	if err := downloadFile(modelURL, targetFile); err == nil {
+		fmt.Fprintf(os.Stderr, "[joss_bg_remover] Modelo ONNX listo en %s\n", targetFile)
+	} else {
+		fmt.Fprintf(os.Stderr, "[joss_bg_remover] Advertencia: Error descargando modelo ONNX en segundo plano: %v\n", err)
+	}
+}
+
+func downloadFile(url, destination string) error {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "Joss-Plugin-BgRemover/1.0")
+
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP error %d al descargar modelo", resp.StatusCode)
+	}
+
+	tmpFile := destination + ".tmp"
+	out, err := os.Create(tmpFile)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(out, resp.Body)
+	_ = out.Close()
+	if err != nil {
+		_ = os.Remove(tmpFile)
+		return err
+	}
+
+	return os.Rename(tmpFile, destination)
 }
 
 func findONNXModelPath() string {
