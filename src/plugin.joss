@@ -1,0 +1,12 @@
+// src/plugin.joss
+// Clase exportada para interactuar con el plugin joss_bg_remover
+
+class JossBgRemover {
+    function ping() {
+        return Plugin::call("joss_bg_remover", "ping", [])
+    }
+
+    function process($data) {
+        return Plugin::call("joss_bg_remover", "process", [$data])
+    }
+}

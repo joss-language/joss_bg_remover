@@ -1,0 +1,17 @@
+name: joss_bg_remover
+version: 1.0.0
+type: joss
+description: Plugin oficial con sidecar nativo Go para Joss Language
+author: JOSPROX
+license: MIT
+entry:
+  main: src/plugin.joss
+native:
+  protocol: joss-rpc-v1
+  windows-amd64: native/windows-amd64/joss_bg_remover.exe
+  windows-arm64: native/windows-arm64/joss_bg_remover.exe
+  linux-amd64: native/linux-amd64/joss_bg_remover
+  linux-arm64: native/linux-arm64/joss_bg_remover
+  darwin-amd64: native/darwin-amd64/joss_bg_remover
+  darwin-arm64: native/darwin-arm64/joss_bg_remover
+dependencies:
