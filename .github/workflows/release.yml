@@ -220,13 +220,13 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           NAME: ${{ steps.meta.outputs.name }}
         run: |
-          BASE="https://github.com/${REPO}/releases/download/${TAG}"
-          # Rewrite native section with release download URLs
           python3 - <<'PYEOF'
           import os, re
 
           name = os.environ['NAME']
-          base = os.environ['BASE']
+          repo = os.environ['REPO']
+          tag  = os.environ['TAG']
+          base = f"https://github.com/{repo}/releases/download/{tag}"
 
           with open('joss.yaml', 'r') as f:
               content = f.read()
@@ -240,9 +240,7 @@ jobs:
               'darwin-arm64':  f'{base}/{name}-darwin-arm64',
           }
 
-          # Replace each native path line
           for plat, url in platforms.items():
-              # Match local path or existing URL
               content = re.sub(
                   rf'(\s+{plat}:\s*).*',
                   rf'\g<1>{url}',
