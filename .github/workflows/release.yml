@@ -33,7 +33,7 @@ jobs:
           go-version: '1.24'
           cache: true
 
-      - name: Download Joss CLI (jossecurity-linux.zip)
+      - name: Download Joss CLI & update to canary
         shell: bash
         run: |
           ASSET_URL=$(python3 <<'PYEOF'
@@ -54,7 +54,7 @@ jobs:
           PYEOF
           )
 
-          echo "Descargando Joss CLI desde: $ASSET_URL"
+          echo "Descargando Joss CLI base desde: $ASSET_URL"
           curl -sL "$ASSET_URL" -o joss_pkg
           unzip -o joss_pkg -d joss_extract
           JOSS_BIN=$(find joss_extract -type f -name 'joss-linux-amd64' | head -1)
@@ -68,6 +68,9 @@ jobs:
           rm -rf joss_extract joss_pkg
           chmod +x ./joss
           mv ./joss /usr/local/bin/joss 2>/dev/null || true
+          
+          echo "Actualizando Joss CLI a modo canary..."
+          joss update --canary -f || ./joss update --canary -f || true
           joss version || ./joss version
       - name: Parse plugin metadata from joss.yaml
         id: meta
