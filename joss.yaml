@@ -1,9 +1,11 @@
-me: joss_bg_remover
+name: joss_bg_remover
 version: 1.0.0
-type: joss
-description: Plugin oficial con sidecar nativo Go para Joss Language
-author: JOSPROX
+description: Plugin oficial con sidecar nativo Go para Joss Language.
+repository: https://github.com/joss-language/joss_bg_remover
 license: MIT
+type: joss
+environment:
+  joss: ">=3.6.6"
 entry:
   main: src/plugin.joss
 native:
