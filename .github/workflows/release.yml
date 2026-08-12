@@ -6,16 +6,8 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      joss_channel:
-        description: Canal del compilador Joss CLI (stable / canary)
-        required: true
-        default: stable
-        type: choice
-        options:
-          - stable
-          - canary
       release_type:
-        description: Tipo de release en GitHub (draft, prerelease, published)
+        description: Tipo de release (draft, prerelease, published)
         required: true
         default: published
         type: choice
@@ -28,183 +20,266 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build Native Sidecars & Package .jp
-    runs-on: windows-latest
-    steps:
-      - name: Checkout plugin repository
-        uses: actions/checkout@v4
+  build:
+    name: Build sidecars (${{ matrix.os }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            ext: .exe
+            upx: true
+          - os: windows
+            arch: arm64
+            runner: windows-latest
+            ext: .exe
+            upx: false        # UPX no soporta ARM64 PE aun
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            ext: ''
+            upx: true
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+            ext: ''
+            upx: true
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+            ext: ''
+            upx: false        # UPX en macOS requiere codesign; skip
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+            ext: ''
+            upx: false
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
 
-      - name: Download Joss CLI release compiler
-        shell: pwsh
+      - name: Parse plugin name from joss.yaml
+        id: meta
+        shell: bash
+        run: |
+          NAME=$(grep '^name:' joss.yaml | head -1 | sed 's/name:\s*//' | tr -d '\r')
+          VER=$(grep '^version:' joss.yaml | head -1 | sed 's/version:\s*//' | tr -d '\r')
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          TAG="${GITHUB_REF_TYPE}" 
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compile sidecar
+        shell: bash
         env:
-          JOSS_CHANNEL: ${{ inputs.joss_channel || 'stable' }}
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
         run: |
-          $channel = $env:JOSS_CHANNEL.ToLower()
-          Write-Host "Obteniendo compilador de Joss para el canal: $channel"
+          NAME="${{ steps.meta.outputs.name }}"
+          OUT="sidecar-build/${NAME}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          mkdir -p sidecar-build
+          go build -trimpath -ldflags="-s -w" -o "$OUT" ./cmd/sidecar
+          echo "Built: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-          $releasesUrl = "https://api.github.com/repos/joss-language/Joss-Programming-Language/releases"
-          try {
-            $releases = Invoke-RestMethod -Uri $releasesUrl -Headers @{ "User-Agent" = "Joss-Plugin-Builder" }
-          } catch {
-            $releasesUrl = "https://api.github.com/repos/josprox/Joss-language/releases"
-            $releases = Invoke-RestMethod -Uri $releasesUrl -Headers @{ "User-Agent" = "Joss-Plugin-Builder" }
-          }
-
-          $targetRelease = $null
-          if ($channel -eq 'canary') {
-            $targetRelease = $releases | Where-Object { $_.prerelease -eq $true -and $_.draft -eq $false } | Select-Object -First 1
-            if (-not $targetRelease) {
-              $targetRelease = $releases | Where-Object { $_.draft -eq $false } | Select-Object -First 1
-            }
-          } else {
-            $targetRelease = $releases | Where-Object { $_.prerelease -eq $false -and $_.draft -eq $false } | Select-Object -First 1
-            if (-not $targetRelease) {
-              $targetRelease = $releases | Where-Object { $_.draft -eq $false } | Select-Object -First 1
-            }
-          }
-
-          if (-not $targetRelease) {
-            throw "No se encontró ningún release disponible para el canal '$channel'"
-          }
-
-          Write-Host "Release seleccionado: $($targetRelease.name) ($($targetRelease.tag_name))"
-
-          $asset = $targetRelease.assets | Where-Object { $_.name -like '*windows.zip*' -or $_.name -eq 'joss.exe' -or $_.name -like '*windows-amd64*' } | Select-Object -First 1
-          if (-not $asset) {
-            $asset = $targetRelease.assets | Where-Object { $_.name -like '*.zip' -or $_.name -like '*.exe' } | Select-Object -First 1
-          }
-
-          if (-not $asset) {
-            throw "No se encontró asset de Windows en el release $($targetRelease.tag_name)"
-          }
-
-          $downloadUrl = $asset.browser_download_url
-          Write-Host "Descargando compilador Joss desde: $downloadUrl ($($asset.name))"
-          Invoke-WebRequest -Uri $downloadUrl -OutFile "downloaded_joss_pkg" -UserAgent "Mozilla/5.0"
-
-          if ($asset.name -like '*.zip') {
-            Expand-Archive -LiteralPath "downloaded_joss_pkg" -DestinationPath "temp_joss" -Force
-            $exe = Get-ChildItem -Path "temp_joss" -Recurse -Filter "joss.exe" | Select-Object -First 1
-            if (-not $exe) {
-              $exe = Get-ChildItem -Path "temp_joss" -Recurse -Filter "joss*" | Where-Object { ! $_.PSIsContainer } | Select-Object -First 1
-            }
-            if (-not $exe) {
-              throw "No se encontró el ejecutable joss.exe dentro del ZIP $($asset.name)"
-            }
-            Copy-Item $exe.FullName "joss.exe" -Force
-          } else {
-            Move-Item "downloaded_joss_pkg" "joss.exe" -Force
-          }
-
-          ./joss.exe version
-
-      - name: Parse plugin name and version from joss.yaml
-        id: plugin_meta
-        shell: pwsh
+      - name: Compress with UPX
+        if: matrix.upx == true
+        shell: bash
         run: |
-          $manifest = Get-Content 'joss.yaml' -Raw
-          if ($manifest -match 'name:\s*([^\r\n]+)') {
-            $name = $Matches[1].Trim()
-          } else {
-            throw 'joss.yaml no declara name'
-          }
-          if ($manifest -match 'version:\s*([^\r\n]+)') {
-            $ver = $Matches[1].Trim()
-          } else {
-            throw 'joss.yaml no declara version'
-          }
-          Write-Host "Plugin: $name v$ver"
-          "name=$name" >> $env:GITHUB_OUTPUT
-          "version=$ver" >> $env:GITHUB_OUTPUT
-          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$ver" }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
+          NAME="${{ steps.meta.outputs.name }}"
+          OUT="sidecar-build/${NAME}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          # Install UPX
+          if command -v apt-get &>/dev/null; then
+            sudo apt-get install -y upx-ucl 2>/dev/null || sudo apt-get install -y upx
+          fi
+          upx --best --lzma "$OUT" && echo "Compressed: $(du -sh "$OUT" | cut -f1)" || echo "UPX failed, using uncompressed binary"
 
-      - name: Cross-compile native sidecars
-        shell: pwsh
+      - name: Upload sidecar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-${{ matrix.os }}-${{ matrix.arch }}
+          path: sidecar-build/
+          retention-days: 1
+
+  release:
+    name: Pack .jp & Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Joss CLI
+        shell: bash
         run: |
-          $pluginName = '${{ steps.plugin_meta.outputs.name }}'
-          $targets = @(
-              @{ os = 'windows'; arch = 'amd64'; ext = '.exe' },
-              @{ os = 'windows'; arch = 'arm64'; ext = '.exe' },
-              @{ os = 'linux';   arch = 'amd64'; ext = '' },
-              @{ os = 'linux';   arch = 'arm64'; ext = '' },
-              @{ os = 'darwin';  arch = 'amd64'; ext = '' },
-              @{ os = 'darwin';  arch = 'arm64'; ext = '' }
-          )
-          $oldCGO = $env:CGO_ENABLED
-          $env:CGO_ENABLED = '0'
-          try {
-            foreach ($t in $targets) {
-              $os = $t.os
-              $arch = $t.arch
-              $ext = $t.ext
-              $outDir = Join-Path $PWD ("native\" + $os + "-" + $arch)
-              New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-              $outFile = Join-Path $outDir ($pluginName + $ext)
-              $env:GOOS = $os
-              $env:GOARCH = $arch
-              Write-Host "Compilando sidecar ${os}-${arch} => $outFile"
-              go build -trimpath -o $outFile ./cmd/sidecar
-              if ($LASTEXITCODE -ne 0) {
-                throw "Fallo compilacion sidecar para ${os}-${arch}"
-              }
-            }
-          } finally {
-            $env:CGO_ENABLED = $oldCGO
-            $env:GOOS = ''
-            $env:GOARCH = ''
+          # Fetch latest joss CLI release for Linux
+          RELEASES=$(curl -sf "https://api.github.com/repos/joss-language/Joss-Programming-Language/releases" \
+            -H "User-Agent: Joss-Plugin-Builder" || \
+            curl -sf "https://api.github.com/repos/josprox/Joss-language/releases" \
+            -H "User-Agent: Joss-Plugin-Builder")
+
+          ASSET_URL=$(echo "$RELEASES" | python3 -c "
+          import sys, json
+          releases = json.load(sys.stdin)
+          for r in releases:
+            if not r.get('draft') and not r.get('prerelease'):
+              for a in r.get('assets', []):
+                n = a['name'].lower()
+                if 'linux' in n and ('amd64' in n or 'x86_64' in n):
+                  print(a['browser_download_url'])
+                  exit()
+          " 2>/dev/null || echo "")
+
+          if [ -z "$ASSET_URL" ]; then
+            # Fallback: download from main branch
+            curl -sL "https://github.com/joss-language/Joss-Programming-Language/archive/refs/heads/main.zip" -o joss_src.zip
+            unzip -q joss_src.zip
+            cd Joss-Programming-Language-main
+            go build -o ../joss ./cmd/joss
+            cd ..
+          else
+            curl -sL "$ASSET_URL" -o joss
+            chmod +x joss
+            mv joss /usr/local/bin/joss || mv joss ./joss
+          fi
+
+          # Make sure joss is in PATH
+          if ! command -v joss &>/dev/null; then
+            chmod +x ./joss
+            export PATH="$PWD:$PATH"
+            echo "$PWD" >> $GITHUB_PATH
+          fi
+          joss version || ./joss version
+
+      - name: Parse plugin name from joss.yaml
+        id: meta
+        shell: bash
+        run: |
+          NAME=$(grep '^name:' joss.yaml | head -1 | sed 's/name:\s*//' | tr -d '\r')
+          VER=$(grep '^version:' joss.yaml | head -1 | sed 's/version:\s*//' | tr -d '\r')
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+          fi
+          REPO_URL=$(grep '^repository:' joss.yaml | head -1 | sed 's/repository:\s*//' | tr -d '\r')
+          echo "repo=$REPO_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Download all sidecar artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sidecar-*
+          merge-multiple: true
+          path: all-sidecars/
+
+      - name: Update joss.yaml native URLs to point to this release
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          NAME: ${{ steps.meta.outputs.name }}
+        run: |
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          # Rewrite native section with release download URLs
+          python3 - <<'PYEOF'
+          import os, re
+
+          name = os.environ['NAME']
+          base = os.environ['BASE']
+
+          with open('joss.yaml', 'r') as f:
+              content = f.read()
+
+          platforms = {
+              'windows-amd64': f'{base}/{name}-windows-amd64.exe',
+              'windows-arm64': f'{base}/{name}-windows-arm64.exe',
+              'linux-amd64':   f'{base}/{name}-linux-amd64',
+              'linux-arm64':   f'{base}/{name}-linux-arm64',
+              'darwin-amd64':  f'{base}/{name}-darwin-amd64',
+              'darwin-arm64':  f'{base}/{name}-darwin-arm64',
           }
 
-      - name: Pack .jp package
-        shell: pwsh
-        run: |
-          $pluginName = '${{ steps.plugin_meta.outputs.name }}'
-          ./joss.exe build package .
-          $jpFile = "$pluginName.jp"
-          if (-not (Test-Path -LiteralPath $jpFile)) {
-            throw "No se genero $jpFile"
-          }
+          # Replace each native path line
+          for plat, url in platforms.items():
+              # Match local path or existing URL
+              content = re.sub(
+                  rf'(\s+{plat}:\s*).*',
+                  rf'\g<1>{url}',
+                  content
+              )
 
-      - name: Generate SHA-256 checksum
-        shell: pwsh
-        run: |
-          $pluginName = '${{ steps.plugin_meta.outputs.name }}'
-          $jpFile = "$pluginName.jp"
-          $hash = (Get-FileHash -LiteralPath $jpFile -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $jpFile" | Out-File -FilePath "SHA256SUMS.txt" -Encoding utf8
+          with open('joss.yaml', 'w') as f:
+              f.write(content)
 
-      - name: Create or update GitHub Release
-        shell: pwsh
+          print("Updated joss.yaml native URLs:")
+          for plat, url in platforms.items():
+              print(f"  {plat}: {url}")
+          PYEOF
+
+      - name: Build .jp package
+        shell: bash
+        run: |
+          NAME="${{ steps.meta.outputs.name }}"
+          joss build package . || ./joss build package .
+          JP="${NAME}.jp"
+          if [ ! -f "$JP" ]; then
+            echo "ERROR: $JP no se generó"
+            exit 1
+          fi
+          SIZE=$(du -sh "$JP" | cut -f1)
+          echo "✓ ${JP} generado (${SIZE})"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          NAME="${{ steps.meta.outputs.name }}"
+          JP="${NAME}.jp"
+          sha256sum "$JP" > SHA256SUMS.txt
+          for f in all-sidecars/*; do
+            sha256sum "$f" >> SHA256SUMS.txt
+          done
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ steps.plugin_meta.outputs.tag }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          NAME: ${{ steps.meta.outputs.name }}
+          VER: ${{ steps.meta.outputs.version }}
           RELEASE_TYPE: ${{ inputs.release_type || 'published' }}
-          PLUGIN_NAME: ${{ steps.plugin_meta.outputs.name }}
-          PLUGIN_VERSION: ${{ steps.plugin_meta.outputs.version }}
         run: |
-          $jpFile = "$env:PLUGIN_NAME.jp"
-          $assets = @($jpFile, "SHA256SUMS.txt")
+          JP="${NAME}.jp"
+          ASSETS=("$JP" "SHA256SUMS.txt")
+          for f in all-sidecars/*; do
+            ASSETS+=("$f")
+          done
 
-          $existing = gh release view $env:RELEASE_TAG --repo $env:GH_REPO --json tagName 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Actualizando Release existente $env:RELEASE_TAG..."
-            gh release upload $env:RELEASE_TAG @assets --repo $env:GH_REPO --clobber
-          } else {
-            Write-Host "Creando nueva release $env:RELEASE_TAG ($env:RELEASE_TYPE)..."
-            $flags = @($env:RELEASE_TAG, '--repo', $env:GH_REPO, '--title', "$env:PLUGIN_NAME v$env:PLUGIN_VERSION", '--generate-notes')
-            if ($env:RELEASE_TYPE -eq 'draft') {
-              $flags += '--draft'
-            } elseif ($env:RELEASE_TYPE -eq 'prerelease') {
-              $flags += '--prerelease'
-            }
-            $flags += $assets
-            gh release create @flags
-          }
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Actualizando release existente $TAG..."
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            echo "Creando release $TAG ($RELEASE_TYPE)..."
+            FLAGS=("$TAG" --title "$NAME v$VER" --generate-notes)
+            [ "$RELEASE_TYPE" = "draft" ]      && FLAGS+=(--draft)
+            [ "$RELEASE_TYPE" = "prerelease" ] && FLAGS+=(--prerelease)
+            gh release create "${FLAGS[@]}" "${ASSETS[@]}"
+          fi
+          echo ""
+          echo "✓ Release $TAG publicado con:"
+          echo "  - $JP (solo bytecode, KBs)"
+          for f in all-sidecars/*; do
+            echo "  - $(basename $f)"
+          done
