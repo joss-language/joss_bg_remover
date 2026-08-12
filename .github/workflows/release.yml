@@ -69,16 +69,30 @@ jobs:
         id: meta
         shell: bash
         run: |
-          NAME=$(grep '^name:' joss.yaml | head -1 | sed 's/name:\s*//' | tr -d '\r')
-          VER=$(grep '^version:' joss.yaml | head -1 | sed 's/version:\s*//' | tr -d '\r')
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          TAG="${GITHUB_REF_TYPE}" 
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=v$VER" >> "$GITHUB_OUTPUT"
-          fi
+          python3 - <<'PYEOF'
+          import os, sys
+          with open('joss.yaml', encoding='utf-8-sig') as f:
+              lines = f.read().splitlines()
+          vals = {}
+          for l in lines:
+              if ':' in l and not l.startswith(' '):
+                  k, _, v = l.partition(':')
+                  vals[k.strip()] = v.strip().strip('"').strip("'")
+          name = vals.get('name', '')
+          ver  = vals.get('version', '')
+          if not name or not ver:
+              print(f'ERROR: name={name!r} version={ver!r}', file=sys.stderr)
+              sys.exit(1)
+          ref_type = os.environ.get('GITHUB_REF_TYPE', '')
+          ref_name = os.environ.get('GITHUB_REF_NAME', '')
+          tag = ref_name if ref_type == 'tag' else f'v{ver}'
+          out = os.environ['GITHUB_OUTPUT']
+          with open(out, 'a') as f:
+              f.write(f'name={name}\n')
+              f.write(f'version={ver}\n')
+              f.write(f'tag={tag}\n')
+          print(f'Plugin: {name} v{ver} tag={tag}')
+          PYEOF
 
       - name: Compile sidecar
         shell: bash
@@ -165,17 +179,32 @@ jobs:
         id: meta
         shell: bash
         run: |
-          NAME=$(grep '^name:' joss.yaml | head -1 | sed 's/name:\s*//' | tr -d '\r')
-          VER=$(grep '^version:' joss.yaml | head -1 | sed 's/version:\s*//' | tr -d '\r')
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=v$VER" >> "$GITHUB_OUTPUT"
-          fi
-          REPO_URL=$(grep '^repository:' joss.yaml | head -1 | sed 's/repository:\s*//' | tr -d '\r')
-          echo "repo=$REPO_URL" >> "$GITHUB_OUTPUT"
+          python3 - <<'PYEOF'
+          import os, sys
+          with open('joss.yaml', encoding='utf-8-sig') as f:
+              lines = f.read().splitlines()
+          vals = {}
+          for l in lines:
+              if ':' in l and not l.startswith(' '):
+                  k, _, v = l.partition(':')
+                  vals[k.strip()] = v.strip().strip('"').strip("'")
+          name = vals.get('name', '')
+          ver  = vals.get('version', '')
+          if not name or not ver:
+              print(f'ERROR: name={name!r} version={ver!r}', file=sys.stderr)
+              sys.exit(1)
+          ref_type = os.environ.get('GITHUB_REF_TYPE', '')
+          ref_name = os.environ.get('GITHUB_REF_NAME', '')
+          tag = ref_name if ref_type == 'tag' else f'v{ver}'
+          repo_url = vals.get('repository', '')
+          out = os.environ['GITHUB_OUTPUT']
+          with open(out, 'a') as f:
+              f.write(f'name={name}\n')
+              f.write(f'version={ver}\n')
+              f.write(f'tag={tag}\n')
+              f.write(f'repo={repo_url}\n')
+          print(f'Plugin: {name} v{ver} tag={tag}')
+          PYEOF
 
       - name: Download all sidecar artifacts
         uses: actions/download-artifact@v4

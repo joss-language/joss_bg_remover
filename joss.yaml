@@ -1,4 +1,4 @@
-﻿name: joss_bg_remover
+me: joss_bg_remover
 version: 1.0.0
 type: joss
 description: Plugin oficial con sidecar nativo Go para Joss Language
