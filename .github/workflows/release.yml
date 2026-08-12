@@ -126,6 +126,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG:          ${{ steps.meta.outputs.tag }}
           NAME:         ${{ steps.meta.outputs.name }}
           VER:          ${{ steps.meta.outputs.version }}
@@ -135,25 +136,25 @@ jobs:
           ASSETS=("$JP" "SHA256SUMS.txt")
 
           # Buscar si ya existe una release con este tag (draft, prerelease o published)
-          if gh release view "$TAG" &>/dev/null; then
+          if gh release view "$TAG" --repo "$GH_REPO" &>/dev/null; then
             echo "La release '$TAG' ya existe. Actualizando archivos y estado..."
 
             # Reemplazar archivos existentes
-            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --repo "$GH_REPO" --clobber
 
             # Actualizar tipo de release segun el input
             if [ "$RELEASE_TYPE" = "draft" ]; then
-              gh release edit "$TAG" --draft=true  --prerelease=false
+              gh release edit "$TAG" --repo "$GH_REPO" --draft=true  --prerelease=false
             elif [ "$RELEASE_TYPE" = "prerelease" ]; then
-              gh release edit "$TAG" --draft=false --prerelease=true
+              gh release edit "$TAG" --repo "$GH_REPO" --draft=false --prerelease=true
             else
-              gh release edit "$TAG" --draft=false --prerelease=false
+              gh release edit "$TAG" --repo "$GH_REPO" --draft=false --prerelease=false
             fi
 
             echo "Release '$TAG' actualizada ($RELEASE_TYPE)."
           else
             echo "Creando nueva release '$TAG' ($RELEASE_TYPE)..."
-            FLAGS=("$TAG" --title "$NAME v$VER" --generate-notes)
+            FLAGS=("$TAG" --repo "$GH_REPO" --title "$NAME v$VER" --generate-notes)
             [ "$RELEASE_TYPE" = "draft" ]      && FLAGS+=(--draft)
             [ "$RELEASE_TYPE" = "prerelease" ] && FLAGS+=(--prerelease)
             gh release create "${FLAGS[@]}" "${ASSETS[@]}"
