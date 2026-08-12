@@ -136,36 +136,14 @@ jobs:
       - name: Download Joss CLI
         shell: bash
         run: |
-          # Fetch latest joss CLI release for Linux
-          RELEASES=$(curl -sf "https://api.github.com/repos/joss-language/Joss-Programming-Language/releases" \
-            -H "User-Agent: Joss-Plugin-Builder" || \
-            curl -sf "https://api.github.com/repos/josprox/Joss-language/releases" \
-            -H "User-Agent: Joss-Plugin-Builder")
-
-          ASSET_URL=$(echo "$RELEASES" | python3 -c "
-          import sys, json
-          releases = json.load(sys.stdin)
-          for r in releases:
-            if not r.get('draft') and not r.get('prerelease'):
-              for a in r.get('assets', []):
-                n = a['name'].lower()
-                if 'linux' in n and ('amd64' in n or 'x86_64' in n):
-                  print(a['browser_download_url'])
-                  exit()
-          " 2>/dev/null || echo "")
-
-          if [ -z "$ASSET_URL" ]; then
-            # Fallback: download from main branch
-            curl -sL "https://github.com/joss-language/Joss-Programming-Language/archive/refs/heads/main.zip" -o joss_src.zip
-            unzip -q joss_src.zip
-            cd Joss-Programming-Language-main
-            go build -o ../joss ./cmd/joss
-            cd ..
-          else
-            curl -sL "$ASSET_URL" -o joss
-            chmod +x joss
-            mv joss /usr/local/bin/joss || mv joss ./joss
-          fi
+          # Always compile Joss CLI from main branch to guarantee we use the latest CLI fix (skipping URL check during build)
+          curl -sL "https://github.com/joss-language/Joss-Programming-Language/archive/refs/heads/main.zip" -o joss_src.zip
+          unzip -q joss_src.zip
+          cd Joss-Programming-Language-main
+          go build -o ../joss ./cmd/joss
+          cd ..
+          chmod +x ./joss
+          mv joss /usr/local/bin/joss || mv joss ./joss
 
           # Make sure joss is in PATH
           if ! command -v joss &>/dev/null; then
@@ -259,6 +237,8 @@ jobs:
         shell: bash
         run: |
           NAME="${{ steps.meta.outputs.name }}"
+          # Clean up any local native folder or leftover binaries before packing
+          rm -rf native/ sidecar-build/ all-sidecars/ downloaded_joss_pkg temp_joss joss_src.zip Joss-Programming-Language-main
           joss build package . || ./joss build package .
           JP="${NAME}.jp"
           if [ ! -f "$JP" ]; then
