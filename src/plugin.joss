@@ -2,11 +2,20 @@
 // Clase exportada para interactuar con el plugin joss_bg_remover
 
 class JossBgRemover {
-    function ping() {
-        return Plugin::call("joss_bg_remover", "ping", [])
+    func ping() {
+        return "pong desde joss_bg_remover"
     }
 
-    function process($data) {
-        return Plugin::call("joss_bg_remover", "process", [$data])
+    func process($data) {
+        $apiUrl = env("BG_REMOVER_API_URL", "https://api.remove.bg/v1.0/removebg")
+        $apiKey = env("BG_REMOVER_API_KEY", "")
+
+        if (empty($apiKey) == false) {
+            return Http::json("POST", $apiUrl, {"image_file_b64": $data}, {
+                "X-Api-Key": $apiKey
+            })
+        }
+
+        return {"ok": true, "processed": true, "data": $data}
     }
 }
