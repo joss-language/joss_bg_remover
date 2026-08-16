@@ -1,6 +1,6 @@
 name: joss_bg_remover
 version: 1.0.2
-description: Plugin oficial con sidecar nativo Go para Joss Language.
+description: Plugin oficial para remoción de fondo de imágenes en Joss.
 repository: https://github.com/joss-language/joss_bg_remover
 license: MIT
 type: joss
@@ -8,12 +8,3 @@ environment:
   joss: ">=3.6.6"
 entry:
   main: src/plugin.joss
-native:
-  protocol: joss-rpc-v1
-  windows-amd64: https://github.com/joss-language/joss_bg_remover/releases/download/v1.0.0/joss_bg_remover-windows-amd64.exe
-  windows-arm64: https://github.com/joss-language/joss_bg_remover/releases/download/v1.0.0/joss_bg_remover-windows-arm64.exe
-  linux-amd64: https://github.com/joss-language/joss_bg_remover/releases/download/v1.0.0/joss_bg_remover-linux-amd64
-  linux-arm64: https://github.com/joss-language/joss_bg_remover/releases/download/v1.0.0/joss_bg_remover-linux-arm64
-  darwin-amd64: https://github.com/joss-language/joss_bg_remover/releases/download/v1.0.0/joss_bg_remover-darwin-amd64
-  darwin-arm64: https://github.com/joss-language/joss_bg_remover/releases/download/v1.0.0/joss_bg_remover-darwin-arm64
-dependencies:
