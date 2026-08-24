@@ -1,10 +1,10 @@
 name: joss_bg_remover
-version: 1.0.2
+version: 1.0.3
 description: Plugin oficial para remoción de fondo de imágenes en Joss.
 repository: https://github.com/joss-language/joss_bg_remover
 license: MIT
 type: joss
 environment:
-  joss: ">=3.6.6"
+  joss: ">=3.6.7"
 entry:
   main: src/plugin.joss

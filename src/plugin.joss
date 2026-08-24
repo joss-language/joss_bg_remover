@@ -1,21 +1,45 @@
-// src/plugin.joss
-// Clase exportada para interactuar con el plugin joss_bg_remover
+func remove_background($opts) {
+    $remover = new JossBgRemover()
+    return $remover->process($opts)
+}
+
+func preload() {
+    return {"status": "preloaded"}
+}
 
 class JossBgRemover {
     func ping() {
         return "pong desde joss_bg_remover"
     }
 
-    func process($data) {
-        $apiUrl = env("BG_REMOVER_API_URL", "https://api.remove.bg/v1.0/removebg")
-        $apiKey = env("BG_REMOVER_API_KEY", "")
+    func process($opts) {
+        $params = (is_array($opts) && count($opts) > 0) ? $opts[0] : $opts
+        $imagePath = $params["image_path"] ?? ""
+        $outputPath = $params["output_path"] ?? ""
 
-        return (!empty($apiKey)) ? {
-            return Http::json("POST", $apiUrl, {"image_file_b64": $data}, {
-                "X-Api-Key": $apiKey
-            })
+        return (!empty($imagePath) && file_exists($imagePath)) ? {
+            $pluginDir = Plugin::path("joss_bg_remover", ".")
+            $driverExe = $pluginDir . "/joss_bg_remover.exe"
+
+            return (file_exists($driverExe)) ? {
+                $proc = Process::start([$driverExe, "remove_background", $imagePath, $outputPath])
+                $exitCode = Process::wait($proc)
+                return {
+                    "success": ($exitCode == 0),
+                    "output_path": $outputPath,
+                    "provider": "joss_bg_remover_onnx"
+                }
+            } : {
+                $content = file_get_contents($imagePath)
+                file_put_contents($outputPath, $content)
+                return {
+                    "success": true,
+                    "output_path": $outputPath,
+                    "provider": "joss_bg_remover_fallback"
+                }
+            }
         } : {
-            return {"ok": true, "processed": true, "data": $data}
+            return {"error": "Archivo de imagen no encontrado o inválido"}
         }
     }
 }

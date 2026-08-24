@@ -17,9 +17,6 @@ import (
 	"sync"
 	"time"
 
-	_ "golang.org/x/image/bmp"
-	_ "golang.org/x/image/webp"
-
 	"github.com/owulveryck/onnx-go"
 	"github.com/owulveryck/onnx-go/backend/x/gorgonnx"
 	"gorgonia.org/tensor"
@@ -44,6 +41,19 @@ type response struct {
 }
 
 func main() {
+	if len(os.Args) >= 4 && os.Args[1] == "remove_background" {
+		imagePath := os.Args[2]
+		outputPath := os.Args[3]
+		res, err := removeBackground(imagePath, outputPath, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		jsonBytes, _ := json.Marshal(res)
+		fmt.Println(string(jsonBytes))
+		os.Exit(0)
+	}
+
 	var req request
 	if err := json.NewDecoder(io.LimitReader(os.Stdin, 16<<20)).Decode(&req); err != nil {
 		write(response{Error: map[string]string{"code": "BAD_REQUEST", "message": err.Error()}})
@@ -114,7 +124,13 @@ func removeBackground(imagePath, outputPath, modelPath string) (map[string]inter
 	return nil, fmt.Errorf("no se pudo remover el fondo de la imagen")
 }
 
-func removeBackgroundONNX(imagePath, outputPath, modelPath string) error {
+func removeBackgroundONNX(imagePath, outputPath, modelPath string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("ONNX error de runtime: %v", r)
+		}
+	}()
+
 	if modelPath == "" {
 		modelPath = ensureONNXModelPath()
 	}
@@ -245,19 +261,28 @@ func removeBackgroundNativeGo(imagePath, outputPath string) error {
 		return fmt.Errorf("dimensiones de imagen inválidas")
 	}
 
-	c1 := img.At(bounds.Min.X, bounds.Min.Y)
-	c2 := img.At(bounds.Max.X-1, bounds.Min.Y)
-	c3 := img.At(bounds.Min.X, bounds.Max.Y-1)
-	c4 := img.At(bounds.Max.X-1, bounds.Max.Y-1)
+	// Muestreo de las cuatro esquinas y bordes superiores e inferiores para determinar el perfil de fondo
+	corners := []color.Color{
+		img.At(bounds.Min.X, bounds.Min.Y),
+		img.At(bounds.Max.X-1, bounds.Min.Y),
+		img.At(bounds.Min.X, bounds.Max.Y-1),
+		img.At(bounds.Max.X-1, bounds.Max.Y-1),
+		img.At(bounds.Min.X+width/2, bounds.Min.Y),
+		img.At(bounds.Min.X+width/4, bounds.Min.Y),
+		img.At(bounds.Min.X+3*width/4, bounds.Min.Y),
+	}
 
-	r1, g1, b1, _ := c1.RGBA()
-	r2, g2, b2, _ := c2.RGBA()
-	r3, g3, b3, _ := c3.RGBA()
-	r4, g4, b4, _ := c4.RGBA()
-
-	bgR := uint8((r1 + r2 + r3 + r4) / 4 >> 8)
-	bgG := uint8((g1 + g2 + g3 + g4) / 4 >> 8)
-	bgB := uint8((b1 + b2 + b3 + b4) / 4 >> 8)
+	var sumR, sumG, sumB uint64
+	for _, c := range corners {
+		r, g, b, _ := c.RGBA()
+		sumR += uint64(r >> 8)
+		sumG += uint64(g >> 8)
+		sumB += uint64(b >> 8)
+	}
+	count := uint64(len(corners))
+	bgR := float64(sumR / count)
+	bgG := float64(sumG / count)
+	bgB := float64(sumB / count)
 
 	outImg := image.NewNRGBA(bounds)
 
@@ -267,22 +292,28 @@ func removeBackgroundNativeGo(imagePath, outputPath string) error {
 			r, g, b, a := c.RGBA()
 			r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
 
-			dr := float64(r8) - float64(bgR)
-			dg := float64(g8) - float64(bgG)
-			db := float64(b8) - float64(bgB)
+			dr := float64(r8) - bgR
+			dg := float64(g8) - bgG
+			db := float64(b8) - bgB
 			distance := math.Sqrt(dr*dr + dg*dg + db*db)
 
 			var alpha uint8
-			if distance < 35 {
+			if distance < 45.0 {
 				alpha = 0
-			} else if distance < 75 {
-				factor := (distance - 35) / 40.0
+			} else if distance < 80.0 {
+				factor := (distance - 45.0) / 35.0
 				alpha = uint8(float64(a8) * factor)
 			} else {
 				alpha = a8
 			}
 
-			outImg.SetNRGBA(x, y, color.NRGBA{R: r8, G: g8, B: b8, A: alpha})
+			// Mantiene exactamente los colores RGB originales de la cara y ropa de la persona
+			outImg.SetNRGBA(x, y, color.NRGBA{
+				R: r8,
+				G: g8,
+				B: b8,
+				A: alpha,
+			})
 		}
 	}
 
@@ -339,13 +370,16 @@ func ensureONNXModelPathAsync() {
 }
 
 func downloadFile(url, destination string) error {
+	client := &http.Client{
+		Timeout: 15 * time.Minute,
+	}
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "Joss-Plugin-BgRemover/1.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
-	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
