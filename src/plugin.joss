@@ -1,18 +1,18 @@
-func remove_background($opts) {
+public func remove_background(mixed $opts) {
     $remover = new JossBgRemover()
     return $remover->process($opts)
 }
 
-func preload() {
+public func preload() {
     return {"status": "preloaded"}
 }
 
-class JossBgRemover {
-    func ping() {
+public class JossBgRemover {
+    public func ping() {
         return "pong desde joss_bg_remover"
     }
 
-    func process($opts) {
+    public func process(mixed $opts) {
         $params = (is_array($opts) && count($opts) > 0) ? $opts[0] : $opts
         $imagePath = $params["image_path"] ?? ""
         $outputPath = $params["output_path"] ?? ""
